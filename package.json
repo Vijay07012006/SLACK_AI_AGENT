@@ -1,0 +1,30 @@
+{
+  "name": "slack_ai_agent",
+  "version": "1.0.0",
+  "description": "",
+  "license": "ISC",
+  "author": "",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node --watch index.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "dependencies": {
+    "@google/generative-ai": "^0.24.1",
+    "@langchain/core": "^1.1.48",
+    "@langchain/openai": "^1.4.7",
+    "@slack/bolt": "^4.7.3",
+    "@slack/web-api": "^7.16.0",
+    "axios": "^1.17.0",
+    "cheerio": "^1.2.0",
+    "dotenv": "^17.4.2",
+    "express": "^4.22.2",
+    "express-async-errors": "^3.1.1",
+    "node-cache": "^5.1.2",
+    "p-queue": "^9.3.0",
+    "pg": "^8.21.0",
+    "winston": "^3.19.0"
+  }
+}

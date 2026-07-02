@@ -1,0 +1,13 @@
+curl -X POST http://localhost:3000/test/analyze-member \
+-H "Content-Type: application/json" \
+-d '{
+  "memberInfo": {
+    "name": "John Doe",
+    "email": "john@techcorp.com",
+    "title": "Senior Software Engineer at TechCorp"
+  }
+}'
+
+# OR 
+
+curl -X POST http://localhost:3000/test/analyze-member -H "Content-Type: application/json" -d "{\"memberInfo\": {\"name\": \"John Doe\", \"email\": \"john@techcorp.com\", \"title\": \"Senior Software Engineer at TechCorp\"}}"

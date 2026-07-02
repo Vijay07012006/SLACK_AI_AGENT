@@ -1,0 +1,764 @@
+=========================================
+WORKSPACE FOLDER STRUCTURE
+=========================================
+d:\Desktop\SLACK_AI_AGENT
+├── .vscode
+│   └── settings.json
+├── db.js
+├── index.js
+├── package.json
+├── test_command.txt
+└── testdb.js
+
+=========================================
+FILE: .vscode/settings.json
+=========================================
+{
+  "cSpell.words": [
+    "bmat",
+    "langchain",
+    "Millis",
+    "slackdb",
+    "Vijay"
+  ]
+}
+
+=========================================
+FILE: db.js
+=========================================
+import pg from 'pg';
+const { Pool } = pg;
+import dotenv from 'dotenv';
+
+dotenv.config();
+
+const isDevelopment = process.env.NODE_ENV === 'development';
+
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URI,
+  ssl: isDevelopment ? { rejectUnauthorized: false } : { rejectUnauthorized: true },
+  max: 20,
+  idleTimeoutMillis: 30000,
+  connectionTimeoutMillis: 10000,
+});
+
+pool.on('connect', () => {
+  console.log('[INFO] Database connected');
+});
+
+pool.on('error', (err) => {
+  console.error('[ERROR] Unexpected database error:', err.message);
+});
+
+export async function initDatabase() {
+  const client = await pool.connect();
+  try {
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS member_analyses (
+        id SERIAL PRIMARY KEY,
+        member_id VARCHAR(255) UNIQUE,
+        member_name VARCHAR(255) NOT NULL,
+        member_email VARCHAR(255),
+        member_title VARCHAR(255),
+        member_timezone VARCHAR(100),
+        fit_score INTEGER NOT NULL,
+        insights JSONB,
+        recommendations JSONB,
+        research_data JSONB,
+        analyzed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        sent_to_slack BOOLEAN DEFAULT FALSE,
+        sent_to_slack_at TIMESTAMP,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_member_id ON member_analyses(member_id);
+    `);
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_analyzed_at ON member_analyses(analyzed_at);
+    `);
+
+    console.log('[INFO] Database schema initialized');
+  } catch (error) {
+    console.error('[ERROR] Failed to initialize database:', error.message);
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+export async function saveMemberAnalysis(memberInfo, analysis, researchData) {
+  const client = await pool.connect();
+  try {
+    const result = await client.query(
+      `INSERT INTO member_analyses (
+        member_id, member_name, member_email, member_title, member_timezone,
+        fit_score, insights, recommendations, research_data
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+      ON CONFLICT (member_id) DO UPDATE SET
+        member_name = EXCLUDED.member_name,
+        member_email = EXCLUDED.member_email,
+        member_title = EXCLUDED.member_title,
+        member_timezone = EXCLUDED.member_timezone,
+        fit_score = EXCLUDED.fit_score,
+        insights = EXCLUDED.insights,
+        recommendations = EXCLUDED.recommendations,
+        research_data = EXCLUDED.research_data,
+        updated_at = CURRENT_TIMESTAMP
+      RETURNING id`,
+      [
+        memberInfo.id || null,
+        memberInfo.name,
+        memberInfo.email || null,
+        memberInfo.title || null,
+        memberInfo.timezone || null,
+        analysis.fitScore,
+        JSON.stringify(analysis.insights),
+        JSON.stringify(analysis.recommendations),
+        JSON.stringify(researchData),
+      ]
+    );
+    console.log(`[INFO] Saved analysis to database with ID: ${result.rows[0].id}`);
+    return result.rows[0].id;
+  } catch (error) {
+    console.error('[ERROR] Failed to save analysis to database:', error.message);
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+export async function markAsSentToSlack(analysisId) {
+  const client = await pool.connect();
+  try {
+    await client.query(
+      `UPDATE member_analyses
+       SET sent_to_slack = TRUE,
+           sent_to_slack_at = CURRENT_TIMESTAMP,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = $1`,
+      [analysisId]
+    );
+  } catch (error) {
+    console.error('[ERROR] Failed to mark as sent to Slack:', error.message);
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+export async function closeDatabase() {
+  await pool.end();
+  console.log('[INFO] Database connection pool closed');
+}
+
+export default pool;
+
+=========================================
+FILE: index.js
+=========================================
+import pkg from "@slack/bolt";
+const { App } = pkg;
+import { WebClient } from "@slack/web-api";
+import { ChatOpenAI } from "@langchain/openai";
+import { ChatPromptTemplate } from "@langchain/core/prompts";
+import express from "express";
+import dotenv from "dotenv";
+import axios from "axios";
+
+import {
+  initDatabase,
+  saveMemberAnalysis,
+  markAsSentToSlack,
+  closeDatabase,
+} from "./db.js";
+
+dotenv.config();
+
+// ---------- Improved logger ----------
+const log = {
+  info: (msg, ...args) => console.log(`[INFO]: ${msg}`, ...args),
+  error: (msg, ...args) => console.error(`[ERROR]: ${msg}`, ...args),
+  debug: (msg, ...args) => {
+    if (process.env.NODE_ENV === "development") {
+      console.debug(`[DEBUG]: ${msg}`, ...args);
+    }
+  },
+};
+
+// ---------- Environment validation ----------
+const requiredEnvVars = [
+  "SLACK_BOT_TOKEN",
+  "SLACK_SIGNING_SECRET",
+  "SLACK_APP_TOKEN",
+  "OPENAI_API_KEY",
+  "DATABASE_URI",
+  "SLACK_PRIVATE_CHANNEL_ID",
+];
+for (const envVar of requiredEnvVars) {
+  if (!process.env[envVar]) {
+    log.error(`Missing required environment variable: ${envVar}`);
+    process.exit(1);
+  }
+}
+
+class SlackAIAgent {
+  constructor() {
+    this.app = express();
+    this.slackApp = new App({
+      token: process.env.SLACK_BOT_TOKEN,
+      signingSecret: process.env.SLACK_SIGNING_SECRET,
+      socketMode: true,
+      appToken: process.env.SLACK_APP_TOKEN,
+    });
+    this.webClient = new WebClient(process.env.SLACK_BOT_TOKEN);
+    this.openai = new ChatOpenAI({
+  model: "gpt-3.5-turbo",   // or "gpt-4o-mini" if available
+  temperature: 0.3,
+  apiKey: process.env.OPENAI_API_KEY,
+});
+    this.setupSlackEvents();
+    this.setupExpress();
+  }
+
+  setupSlackEvents() {
+    // Event: new member joins workspace (team_join)
+    this.slackApp.event("team_join", async ({ event }) => {
+      try {
+        log.info(
+          `New member joined: ${event.user.real_name || event.user.name}`
+        );
+        const userInfo = await this.getUserInfo(event.user.id);
+        await this.analyzeAndPostMember(userInfo);
+      } catch (error) {
+        log.error("Error processing team_join:", error.message);
+      }
+    });
+
+    // Event: member joins a channel (member_joined_channel) - NOW FIXED
+    this.slackApp.event("member_joined_channel", async ({ event }) => {
+      try {
+        if (event.channel_type === "C") {
+          log.info(`Member ${event.user} joined channel ${event.channel}`);
+          const userInfo = await this.getUserInfo(event.user);
+          const channelInfo = await this.getChannelInfo(event.channel);
+          await this.analyzeChannelJoin(userInfo, channelInfo);
+        }
+      } catch (error) {
+        log.error("Error processing member_joined_channel:", error.message);
+      }
+    });
+
+    this.slackApp.error(async (error) => {
+      log.error("Slack error:", error.message);
+    });
+  }
+
+  setupExpress() {
+    this.app.use(express.json());
+
+    // Health check
+    this.app.get("/health", (req, res) => {
+      res.json({ status: "healthy", timestamp: new Date().toISOString() });
+    });
+
+    // Test endpoint (only in development)
+    if (process.env.NODE_ENV === "development") {
+      this.app.post("/test/analyze-member", async (req, res) => {
+        try {
+          const { memberInfo } = req.body;
+          if (!memberInfo) {
+            return res
+              .status(400)
+              .json({ error: "Missing memberInfo is required" });
+          }
+          const analysis = await this.analyzeAndPostMember(memberInfo);
+          res.json({
+            success: true,
+            analysis,
+            timestamp: new Date().toISOString(),
+          });
+        } catch (error) {
+          log.error("Test analysis error:", error.message);
+          res
+            .status(500)
+            .json({ error: "Analysis failed", details: error.message });
+        }
+      });
+    }
+
+    // Global error handler
+    this.app.use((err, req, res, next) => {
+      log.error("Express error:", err.message);
+      res.status(500).json({ error: "Internal Server Error" });
+    });
+  }
+
+  // ---------- NEW: Get channel information ----------
+  async getChannelInfo(channelId) {
+    try {
+      const result = await this.webClient.conversations.info({
+        channel: channelId,
+      });
+      if (!result.ok || !result.channel) {
+        throw new Error("Channel not found");
+      }
+      return {
+        id: result.channel.id,
+        name: result.channel.name,
+        isPrivate: result.channel.is_private,
+        topic: result.channel.topic?.value || "",
+      };
+    } catch (error) {
+      log.error(`Failed to get channel info for ${channelId}:`, error.message);
+      return { id: channelId, name: "unknown", isPrivate: true };
+    }
+  }
+
+  // ---------- NEW: Analyze when member joins a channel ----------
+  async analyzeChannelJoin(userInfo, channelInfo) {
+    log.info(
+      `Analyzing channel join: ${userInfo.name} joined #${channelInfo.name}`
+    );
+    // You can customise this message or send a lightweight analysis
+    const message = {
+      channel: process.env.SLACK_PRIVATE_CHANNEL_ID,
+      text: `👋 *${userInfo.name}* joined channel \`#${channelInfo.name}\``,
+      blocks: [
+        {
+          type: "section",
+          text: {
+            type: "mrkdwn",
+            text: `*${userInfo.name}* just joined channel *<#${channelInfo.id}>*`,
+          },
+        },
+        {
+          type: "context",
+          elements: [
+            {
+              type: "mrkdwn",
+              text: `Title: ${userInfo.title || "—"} | Email: ${userInfo.email || "—"}`,
+            },
+          ],
+        },
+      ],
+    };
+    try {
+      await this.webClient.chat.postMessage(message);
+      log.info(`Posted channel-join notification for ${userInfo.name}`);
+    } catch (error) {
+      log.error(`Failed to post channel-join message: ${error.message}`);
+    }
+  }
+
+  // ---------- Get user info from Slack ----------
+  async getUserInfo(userId) {
+    const result = await this.webClient.users.info({ user: userId });
+    const user = result.user;
+    return {
+      id: user.id,
+      name: user.real_name || user.name,
+      username: user.name,
+      email: user.profile?.email || null,
+      title: user.profile?.title || null,
+      timezone: user.tz,
+      profile: {
+        firstName: user.profile?.first_name || null,
+        lastName: user.profile?.last_name || null,
+        statusText: user.profile?.status_text || null,
+      },
+    };
+  }
+
+  // ---------- Full member analysis (for team_join) ----------
+  async analyzeAndPostMember(memberInfo) {
+    let analysisId = null;
+    try {
+      log.info(`Processing member: ${memberInfo.name} (${memberInfo.id})`);
+      const researchData = await this.doBasicResearch(memberInfo);
+      const analysis = await this.analyzeWithAI(memberInfo, researchData);
+      analysisId = await saveMemberAnalysis(memberInfo, analysis, researchData);
+      await this.postAnalysisToChannel(memberInfo, analysis, researchData);
+      if (analysisId) {
+        await markAsSentToSlack(analysisId);
+      }
+    } catch (error) {
+      log.error(`Error processing ${memberInfo.name}:`, error.message);
+      if (analysisId) {
+        log.info(
+          `Analysis ${analysisId} saved but not sent to Slack due to error`
+        );
+      }
+      throw error;
+    }
+  }
+
+  // ---------- Basic research: company + GitHub ----------
+  async doBasicResearch(memberInfo) {
+    const results = [];
+    try {
+      if (memberInfo.email && !this.isPersonalEmail(memberInfo.email)) {
+        const domain = memberInfo.email.split("@")[1];
+        const companyInfo = await this.getCompanyInfo(domain);
+        if (companyInfo) results.push(companyInfo);
+
+        if (memberInfo.name) {
+          const githubInfo = await this.getGithubInfo(memberInfo.name);
+          if (githubInfo) results.push(githubInfo);
+        }
+      }
+    } catch (error) {
+      log.error(`Research error for ${memberInfo.name}:`, error.message);
+    }
+    return results;
+  }
+
+  // ---------- Improved company info (fallback to http & without www) ----------
+  async getCompanyInfo(domain) {
+    const urls = [
+      `https://www.${domain}`,
+      `https://${domain}`,
+      `http://www.${domain}`,
+      `http://${domain}`,
+    ];
+    for (const url of urls) {
+      try {
+        const response = await axios.get(url, {
+          timeout: 5000,
+          headers: { "User-Agent": "Mozilla/5.0" },
+        });
+        const titleMatch = response.data.match(/<title>(.*?)<\/title>/i);
+        const title = titleMatch ? titleMatch[1] : `Company at ${domain}`;
+        return {
+          url,
+          title,
+          content: `Fetched from ${url}`,
+        };
+      } catch (error) {
+        log.debug(`Could not fetch ${url}: ${error.message}`);
+      }
+    }
+    return null;
+  }
+
+  async getGithubInfo(name) {
+    try {
+      const response = await axios.get(
+        `https://api.github.com/search/users?q=${encodeURIComponent(name)}`,
+        { timeout: 5000 }
+      );
+      if (response.data.items && response.data.items.length > 0) {
+        const user = response.data.items[0];
+        return {
+          url: user.html_url,
+          title: `GitHub: ${user.login}`,
+          content: `${user.public_repos} public repos, ${user.followers} followers`,
+          type: "github",
+        };
+      }
+    } catch (error) {
+      log.debug(`GitHub search error: ${error.message}`);
+    }
+    return null;
+  }
+
+  // ---------- AI analysis with JSON parsing ----------
+  async analyzeWithAI(memberInfo, researchData) {
+    const promptTemplate = ChatPromptTemplate.fromTemplate(`
+    Analyze this new community member for fit with our commercial product.
+
+    Company: ${process.env.COMPANY_NAME || "Our Company"}
+    Product: ${process.env.COMPANY_PRODUCT || "Our Product"}
+
+    Member Info:
+    - Name: {name}
+    - Email: {email}
+    - Title: {title}
+
+    Research Data:
+    {research}
+
+    Provide a JSON response with the following fields:
+    - fitScore (0-100): likelihood they'd be interested in our product
+    - insights: array of 3-5 key observations about the member and their potential interest in our product
+    - recommendations: array of 2-3 actionable recommendations for engaging this member
+
+    Consider job title, company size, technical background, and budget authority.
+    `);
+
+    try {
+      const researchSummary =
+        researchData.length > 0
+          ? researchData.map((r) => `- ${r.title}: ${r.content}`).join("\n")
+          : "No additional research data available.";
+
+      const chain = promptTemplate.pipe(this.openai);
+      const result = await chain.invoke({
+        name: memberInfo.name,
+        email: memberInfo.email,
+        title: memberInfo.title,
+        research: researchSummary,
+      });
+
+      const responseText = result.content || result;
+      const cleanedResponse = responseText
+        .replace(/```json\n?|\n?```/g, "")
+        .trim();
+      const analysis = JSON.parse(cleanedResponse);
+
+      return {
+        fitScore: Math.max(0, Math.min(100, analysis.fitScore || 50)),
+        insights: Array.isArray(analysis.insights)
+          ? analysis.insights
+          : ["Analysis completed, but no insights provided."],
+        recommendations: Array.isArray(analysis.recommendations)
+          ? analysis.recommendations
+          : ["Follow up recommended."],
+      };
+    } catch (error) {
+      log.error("AI analysis error:", error.message);
+      return {
+        fitScore: 50,
+        insights: ["Unable to complete full analysis"],
+        recommendations: ["Manual review recommended"],
+      };
+    }
+  }
+
+  // ---------- Post analysis to Slack channel ----------
+  async postAnalysisToChannel(memberInfo, analysis, researchData) {
+    const channelId = process.env.SLACK_PRIVATE_CHANNEL_ID;
+    if (!channelId) {
+      log.error("SLACK_PRIVATE_CHANNEL_ID is not defined");
+      return;
+    }
+
+    const color =
+      analysis.fitScore >= 80
+        ? "#36a64f"
+        : analysis.fitScore >= 60
+          ? "#ffb84d"
+          : analysis.fitScore >= 40
+            ? "#ff9500"
+            : "#ff4444";
+
+    const blocks = [
+      {
+        type: "header",
+        text: {
+          type: "plain_text",
+          text: `New Member Analysis: ${memberInfo.name}`,
+        },
+      },
+      {
+        type: "section",
+        fields: [
+          {
+            type: "mrkdwn",
+            text: `*Fit Score:* ${analysis.fitScore}/100`,
+          },
+          {
+            type: "mrkdwn",
+            text: `*Email:* ${memberInfo.email || "N/A"}`,
+          },
+          {
+            type: "mrkdwn",
+            text: `*Title:* ${memberInfo.title || "N/A"}`,
+          },
+        ],
+      },
+    ];
+
+    if (analysis.insights && analysis.insights.length > 0) {
+      blocks.push({
+        type: "section",
+        text: {
+          type: "mrkdwn",
+          text: `*Insights:*\n${analysis.insights
+            .map((insight, idx) => `• ${insight}`)
+            .join("\n")}`,
+        },
+      });
+    }
+
+    if (analysis.recommendations && analysis.recommendations.length > 0) {
+      blocks.push({
+        type: "section",
+        text: {
+          type: "mrkdwn",
+          text: `*Recommendations:*\n${analysis.recommendations
+            .map((rec, idx) => `• ${rec}`)
+            .join("\n")}`,
+        },
+      });
+    }
+
+    blocks.push({
+      type: "context",
+      elements: [
+        {
+          type: "mrkdwn",
+          text: `• Analyzed: ${new Date().toISOString()}`,
+        },
+      ],
+    });
+
+    await this.webClient.chat.postMessage({
+      channel: channelId,
+      text: `New Member Analysis: ${memberInfo.name} (${analysis.fitScore}/100)`,
+      blocks: blocks,
+    });
+
+    log.info(
+      `Analysis posted to channel for ${memberInfo.name} with fit score ${analysis.fitScore}`
+    );
+  }
+
+  isPersonalEmail(email) {
+    const personalDomains = [
+      "gmail.com",
+      "yahoo.com",
+      "hotmail.com",
+      "outlook.com",
+      "icloud.com",
+    ];
+    const domain = email.split("@")[1]?.toLowerCase();
+    return personalDomains.includes(domain);
+  }
+
+  // ---------- Start bot (Slack first, then Express) ----------
+  async start() {
+    try {
+      log.info("Initializing database...");
+      await initDatabase();
+
+      // Start Slack socket connection first
+      await this.slackApp.start();
+      log.info("Slack bot successfully started");
+
+      // Then start Express server
+      const port = process.env.PORT || 3000;
+      this.server = this.app.listen(port, () => {
+        log.info(`Express server listening on port ${port}`);
+      });
+
+      log.info("Slack AI Agent is running and ready to process events.");
+
+      if (process.env.NODE_ENV === "development") {
+        log.info(
+          `Test endpoint: POST http://localhost:${port}/test/analyze-member`
+        );
+      }
+    } catch (error) {
+      log.error("Failed to start:", error.message);
+      process.exit(1);
+    }
+  }
+
+  // ---------- Graceful shutdown ----------
+  async stop() {
+    log.info("Shutting down Slack AI Agent...");
+    try {
+      await this.slackApp.stop();
+      if (this.server) {
+        await new Promise((resolve, reject) => {
+          this.server.close((err) => {
+            if (err) reject(err);
+            else resolve();
+          });
+        });
+      }
+      await closeDatabase();
+      log.info("Shutdown complete.");
+    } catch (error) {
+      log.error("Error during shutdown:", error.message);
+    }
+    process.exit(0);
+  }
+}
+
+// ---------- Instantiate and run ----------
+const agent = new SlackAIAgent();
+
+process.on("SIGINT", () => agent.stop());
+process.on("SIGTERM", () => agent.stop());
+
+agent.start().catch((error) => {
+  console.error("Startup failed:", error.message);
+  process.exit(1);
+});
+
+export default agent;
+
+=========================================
+FILE: package.json
+=========================================
+{
+  "name": "slack_ai_agent",
+  "version": "1.0.0",
+  "description": "",
+  "license": "ISC",
+  "author": "",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node --watch index.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "dependencies": {
+    "@langchain/core": "^1.1.48",
+    "@langchain/openai": "^1.4.7",
+    "@slack/bolt": "^4.7.3",
+    "@slack/web-api": "^7.16.0",
+    "axios": "^1.17.0",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "pg": "^8.21.0"
+  }
+}
+
+=========================================
+FILE: test_command.txt
+=========================================
+curl -X POST http://localhost:3000/test/analyze-member \
+-H "Content-Type: application/json" \
+-d '{
+  "memberInfo": {
+    "name": "John Doe",
+    "email": "john@techcorp.com",
+    "title": "Senior Software Engineer at TechCorp"
+  }
+}'
+
+# OR 
+
+curl -X POST http://localhost:3000/test/analyze-member -H "Content-Type: application/json" -d "{\"memberInfo\": {\"name\": \"John Doe\", \"email\": \"john@techcorp.com\", \"title\": \"Senior Software Engineer at TechCorp\"}}"
+
+=========================================
+FILE: testdb.js
+=========================================
+import pg from "pg";
+import dotenv from "dotenv";
+
+dotenv.config();
+
+const { Pool } = pg;
+
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URI,
+  ssl: {
+    rejectUnauthorized: false,
+  },
+});
+
+try {
+  const result = await pool.query("SELECT NOW()");
+  console.log(result.rows);
+} catch (err) {
+  console.error(err);
+}
+
+await pool.end();
