@@ -107,13 +107,7 @@ export async function analyzeChannelJoin(webClient, userInfo, channelInfo) {
   }
 }
 
-export async function postAnalysisToChannel(webClient, memberInfo, analysis, researchData) {
-  const channelId = process.env.SLACK_PRIVATE_CHANNEL_ID;
-  if (!channelId) {
-    logger.error("SLACK_PRIVATE_CHANNEL_ID is not defined");
-    return;
-  }
-
+export function buildAnalysisBlocks(memberInfo, analysis) {
   const blocks = [
     {
       type: "header",
@@ -174,6 +168,18 @@ export async function postAnalysisToChannel(webClient, memberInfo, analysis, res
       },
     ],
   });
+
+  return blocks;
+}
+
+export async function postAnalysisToChannel(webClient, memberInfo, analysis, researchData) {
+  const channelId = process.env.SLACK_PRIVATE_CHANNEL_ID;
+  if (!channelId) {
+    logger.error("SLACK_PRIVATE_CHANNEL_ID is not defined");
+    return;
+  }
+
+  const blocks = buildAnalysisBlocks(memberInfo, analysis);
 
   try {
     await webClient.chat.postMessage({

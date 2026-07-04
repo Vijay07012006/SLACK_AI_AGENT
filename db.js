@@ -139,6 +139,25 @@ export async function markAsSentToSlack(analysisId) {
   }
 }
 
+export async function getMemberById(memberId) {
+  const client = await pool.connect();
+  try {
+    const result = await client.query(
+      `SELECT * FROM member_analyses WHERE member_id = $1`,
+      [memberId]
+    );
+    if (result.rows.length > 0) {
+      return result.rows[0];
+    }
+    return null;
+  } catch (error) {
+    logger.error(`Failed to get member analysis by ID: ${error.message}`);
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 export async function closeDatabase() {
   await pool.end();
   logger.info('Database connection pool closed');

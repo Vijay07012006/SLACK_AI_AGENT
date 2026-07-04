@@ -13,6 +13,7 @@ import {
   markAsSentToSlack,
   closeDatabase,
   getLastAnalysisTime,
+  getMemberById,
 } from "./db.js";
 
 import logger from "./src/services/logger.js";
@@ -23,6 +24,7 @@ import {
   getChannelInfo,
   analyzeChannelJoin,
   postAnalysisToChannel,
+  buildAnalysisBlocks,
 } from "./src/services/slack.service.js";
 
 dotenv.config();
@@ -112,6 +114,76 @@ class SlackAIAgent {
 
     this.slackApp.error(async (error) => {
       logger.error(`Slack error: ${error.message}`);
+    });
+
+    // Slash Command: /analyze
+    this.slackApp.command("/analyze", async ({ command, ack, say, client }) => {
+      await ack();
+      try {
+        const text = command.text || "";
+        const match = text.match(/<@(U[A-Z0-9]+)>/);
+        if (!match) {
+          await say("Please mention a user. Usage: `/analyze @username`");
+          return;
+        }
+
+        const userId = match[1];
+        logger.info(`Slash command /analyze triggered for user: ${userId}`);
+
+        // Fetch existing analysis from db
+        const existing = await getMemberById(userId);
+        if (existing) {
+          logger.info(`Found existing analysis for user ${userId} in database`);
+          
+          const analysis = {
+            fitScore: existing.fit_score,
+            insights: existing.insights,
+            recommendations: existing.recommendations,
+          };
+          
+          const memberInfo = {
+            name: existing.member_name,
+            email: existing.member_email,
+            title: existing.member_title,
+          };
+          
+          const blocks = buildAnalysisBlocks(memberInfo, analysis);
+          
+          blocks.unshift({
+            type: "section",
+            text: {
+              type: "mrkdwn",
+              text: "*Existing analysis from database*"
+            }
+          });
+
+          await say({
+            text: `Existing analysis for ${memberInfo.name}`,
+            blocks: blocks,
+          });
+          return;
+        }
+
+        // Fetch user info from Slack since not in DB
+        const userInfo = await getUserInfo(client, userId);
+        
+        // Run full analysis
+        const analysis = await this.analyzeAndPostMember(userInfo);
+        if (!analysis) {
+          await say(`Analysis for ${userInfo.name} skipped (duplicate/recent).`);
+          return;
+        }
+
+        const blocks = buildAnalysisBlocks(userInfo, analysis);
+        await say({
+          text: `New Member Analysis for ${userInfo.name}`,
+          blocks: blocks,
+        });
+
+      } catch (error) {
+        logger.error(`Error in /analyze command: ${error.message}`);
+        await say(`Error running analysis: ${error.message}`);
+      }
     });
   }
 
