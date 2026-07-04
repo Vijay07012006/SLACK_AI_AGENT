@@ -382,10 +382,17 @@ class SlackAIAgent {
         const highFitCount = parseInt(high.rows[0].count) || 0;
         const todayCount = parseInt(today.rows[0].count) || 0;
 
+        // Last Updated timestamp converted to Asia/Kolkata (IST)
+        const lastUpdated = new Date().toLocaleString('en-IN', {
+          timeZone: 'Asia/Kolkata',
+          dateStyle: 'medium',
+          timeStyle: 'short'
+        });
+
         // Format trend labels and values
         const trendLabels = trend.rows.map(r => {
           const d = new Date(r.date);
-          return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+          return d.toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata', month: 'short', day: 'numeric' });
         });
         const trendValues = trend.rows.map(r => parseInt(r.count));
 
@@ -399,35 +406,37 @@ class SlackAIAgent {
         const distLabels = Object.keys(distBuckets);
         const distValues = Object.values(distBuckets);
 
-        // Format recent members table rows
+        // Format recent members table rows with Asia/Kolkata timestamps
         const recentRowsHTML = recent.rows.map(r => {
-          const dateStr = new Date(r.analyzed_at).toLocaleString(undefined, {
+          const dateStr = new Date(r.analyzed_at).toLocaleString('en-IN', {
+            timeZone: 'Asia/Kolkata',
             month: 'short',
             day: 'numeric',
             hour: '2-digit',
-            minute: '2-digit'
+            minute: '2-digit',
+            hour12: true
           });
           
-          let scoreBadgeClass = "bg-rose-500/10 text-rose-400 border-rose-500/20";
+          let scoreBadgeClass = "bg-[#FFF5F5] text-[#C53030] border-[#C53030]/20";
           if (r.fit_score >= 80) {
-            scoreBadgeClass = "bg-emerald-500/10 text-emerald-400 border-emerald-500/20";
+            scoreBadgeClass = "bg-[#E6F4EA] text-[#0A7E3C] border-[#0A7E3C]/20";
           } else if (r.fit_score >= 50) {
-            scoreBadgeClass = "bg-indigo-500/10 text-indigo-400 border-indigo-500/20";
+            scoreBadgeClass = "bg-[#EBF8FF] text-[#2B6CB0] border-[#2B6CB0]/20";
           } else if (r.fit_score >= 30) {
-            scoreBadgeClass = "bg-yellow-500/10 text-yellow-400 border-yellow-500/20";
+            scoreBadgeClass = "bg-[#FEFCBF] text-[#B7791F] border-[#B7791F]/20";
           }
 
           return `
-            <tr class="hover:bg-slate-900/20 transition-colors duration-200">
-              <td class="px-6 py-4 font-medium text-slate-200">${r.member_name}</td>
-              <td class="px-6 py-4 text-slate-400">${r.member_title || 'N/A'}</td>
-              <td class="px-6 py-4 text-slate-400">${r.member_email || 'N/A'}</td>
+            <tr class="hover:bg-slate-50 transition-colors duration-200 even:bg-slate-50/50">
+              <td class="px-6 py-4 font-medium text-slate-900">${r.member_name}</td>
+              <td class="px-6 py-4 text-slate-600">${r.member_title || 'N/A'}</td>
+              <td class="px-6 py-4 text-slate-600">${r.member_email || 'N/A'}</td>
               <td class="px-6 py-4">
                 <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold border ${scoreBadgeClass}">
                   ${r.fit_score}/100
                 </span>
               </td>
-              <td class="px-6 py-4 text-slate-400">${dateStr}</td>
+              <td class="px-6 py-4 text-slate-600">${dateStr}</td>
             </tr>
           `;
         }).join('\n');
@@ -448,6 +457,17 @@ class SlackAIAgent {
                 tailwind.config = {
                   theme: {
                     extend: {
+                      colors: {
+                        brand: {
+                          maroon: '#800020',
+                          maroonLight: '#F3E8EB',
+                          green: '#0A7E3C',
+                          greenLight: '#E6F4EA',
+                          bg: '#F8F9FA',
+                          darkText: '#1A1A1A',
+                          mutedText: '#4A4A4A',
+                        }
+                      },
                       fontFamily: {
                         sans: ['Inter', 'sans-serif'],
                       },
@@ -456,83 +476,83 @@ class SlackAIAgent {
                 }
               </script>
               <style>
-                .glass-panel {
-                  background: rgba(15, 23, 42, 0.65);
-                  backdrop-filter: blur(12px);
-                  -webkit-backdrop-filter: blur(12px);
-                  border: 1px solid rgba(255, 255, 255, 0.08);
-                }
-                .glass-panel:hover {
-                  border-color: rgba(99, 102, 241, 0.3);
-                  box-shadow: 0 0 20px rgba(99, 102, 241, 0.1);
-                }
                 body {
                   font-family: 'Inter', sans-serif;
                 }
+                .dashboard-card {
+                  background: #FFFFFF;
+                  border: 1px solid #E2E8F0;
+                  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.05);
+                  transition: all 0.2s ease-in-out;
+                }
+                .dashboard-card:hover {
+                  transform: translateY(-2px);
+                  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.08);
+                }
               </style>
             </head>
-            <body class="bg-gradient-to-br from-slate-950 via-slate-900 to-indigo-950 min-h-full text-slate-100 p-4 md:p-8">
+            <body class="bg-brand-bg min-h-full text-brand-darkText p-4 md:p-8">
               <div class="max-w-7xl mx-auto space-y-8">
                 
                 <!-- Top Header -->
-                <div class="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 border-b border-slate-800/80 pb-6">
+                <div class="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 border-b-2 border-brand-maroon pb-6">
                   <div>
-                    <h1 class="text-3xl font-extrabold tracking-tight bg-gradient-to-r from-indigo-400 via-purple-400 to-pink-400 bg-clip-text text-transparent flex items-center gap-2">
+                    <h1 class="text-3xl font-extrabold tracking-tight text-brand-maroon flex items-center gap-2">
                       📊 Slack AI Dashboard
                     </h1>
-                    <p class="text-sm text-slate-400 mt-1">Real-time workspace insights and community lead analysis</p>
+                    <p class="text-sm text-brand-mutedText mt-1">Real-time workspace insights and community lead analysis (IST Timezone)</p>
                   </div>
-                  <div class="text-xs md:text-sm text-slate-400 bg-slate-900/60 px-4 py-2 rounded-full border border-slate-800">
-                    🕒 Last Updated: <span class="text-indigo-400 font-semibold">${new Date().toLocaleString()}</span>
+                  <div class="text-xs md:text-sm text-brand-mutedText bg-white px-4 py-2 rounded-full border border-slate-200 shadow-sm">
+                    🕒 Last Updated (IST): <span class="text-brand-maroon font-semibold">${lastUpdated}</span>
                   </div>
                 </div>
 
                 <!-- Stats Row -->
                 <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
                   <!-- Card 1 -->
-                  <div class="glass-panel p-6 rounded-2xl transition-all duration-300">
+                  <div class="dashboard-card p-6 rounded-2xl border-l-4 border-l-brand-maroon">
                     <div class="flex justify-between items-start">
                       <div>
-                        <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider">Total Members</p>
-                        <h3 class="text-3xl font-bold text-slate-100 mt-2 counter" data-target="${totalCount}">${totalCount}</h3>
+                        <p class="text-xs font-semibold text-brand-mutedText uppercase tracking-wider">Total Members</p>
+                        <h3 class="text-3xl font-bold text-brand-maroon mt-2 counter" data-target="${totalCount}">${totalCount}</h3>
                       </div>
-                      <div class="p-3 bg-indigo-500/10 text-indigo-400 rounded-xl">
+                      <div class="p-3 bg-brand-maroonLight text-brand-maroon rounded-xl">
                         <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"></path></svg>
                       </div>
                     </div>
                   </div>
                   <!-- Card 2 -->
-                  <div class="glass-panel p-6 rounded-2xl transition-all duration-300">
+                  <div class="dashboard-card p-6 rounded-2xl border-l-4 border-l-brand-maroon">
                     <div class="flex justify-between items-start">
                       <div>
-                        <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider">Average Fit Score</p>
-                        <h3 class="text-3xl font-bold text-slate-100 mt-2"><span class="counter" data-target="${avgScore}">${avgScore}</span><span class="text-lg text-slate-500">/100</span></h3>
+                        <p class="text-xs font-semibold text-brand-mutedText uppercase tracking-wider">Average Fit Score</p>
+                        <h3 class="text-3xl font-bold text-brand-maroon mt-2"><span class="counter" data-target="${avgScore}">${avgScore}</span><span class="text-lg text-brand-mutedText">/100</span></h3>
                       </div>
-                      <div class="p-3 bg-purple-500/10 text-purple-400 rounded-xl">
+                      <div class="p-3 bg-brand-maroonLight text-brand-maroon rounded-xl">
                         <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"></path></svg>
                       </div>
                     </div>
                   </div>
                   <!-- Card 3 -->
-                  <div class="glass-panel p-6 rounded-2xl transition-all duration-300">
+                  <div class="dashboard-card p-6 rounded-2xl border-l-4 border-l-brand-green">
                     <div class="flex justify-between items-start">
                       <div>
-                        <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider">High Fit Leads (≥80)</p>
-                        <h3 class="text-3xl font-bold text-slate-100 mt-2 counter" data-target="${highFitCount}">${highFitCount}</h3>
+                        <p class="text-xs font-semibold text-brand-mutedText uppercase tracking-wider">High Fit Leads (≥80)</p>
+                        <h3 class="text-3xl font-bold text-brand-green mt-2 counter" data-target="${highFitCount}">${highFitCount}</h3>
                       </div>
-                      <div class="p-3 bg-emerald-500/10 text-emerald-400 rounded-xl">
+                      <div class="p-3 bg-brand-greenLight text-brand-green rounded-xl">
                         <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
                       </div>
                     </div>
                   </div>
                   <!-- Card 4 -->
-                  <div class="glass-panel p-6 rounded-2xl transition-all duration-300">
+                  <div class="dashboard-card p-6 rounded-2xl border-l-4 border-l-brand-maroon">
                     <div class="flex justify-between items-start">
                       <div>
-                        <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider">New Leads Today</p>
-                        <h3 class="text-3xl font-bold text-slate-100 mt-2 counter" data-target="${todayCount}">${todayCount}</h3>
+                        <p class="text-xs font-semibold text-brand-mutedText uppercase tracking-wider">New Leads Today</p>
+                        <h3 class="text-3xl font-bold text-brand-maroon mt-2 counter" data-target="${todayCount}">${todayCount}</h3>
                       </div>
-                      <div class="p-3 bg-rose-500/10 text-rose-400 rounded-xl">
+                      <div class="p-3 bg-brand-maroonLight text-brand-maroon rounded-xl">
                         <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
                       </div>
                     </div>
@@ -542,15 +562,15 @@ class SlackAIAgent {
                 <!-- Charts Row -->
                 <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
                   <!-- Line Chart Container -->
-                  <div class="glass-panel p-6 rounded-2xl lg:col-span-2">
-                    <h4 class="text-sm font-semibold text-slate-300 mb-4 uppercase tracking-wider">7-Day Growth Trend</h4>
+                  <div class="dashboard-card p-6 rounded-2xl lg:col-span-2">
+                    <h4 class="text-sm font-semibold text-brand-mutedText mb-4 uppercase tracking-wider">7-Day Growth Trend</h4>
                     <div class="h-64 relative">
                       <canvas id="growthChart"></canvas>
                     </div>
                   </div>
                   <!-- Doughnut Chart Container -->
-                  <div class="glass-panel p-6 rounded-2xl">
-                    <h4 class="text-sm font-semibold text-slate-300 mb-4 uppercase tracking-wider">Fit Score Distribution</h4>
+                  <div class="dashboard-card p-6 rounded-2xl">
+                    <h4 class="text-sm font-semibold text-brand-mutedText mb-4 uppercase tracking-wider">Fit Score Distribution</h4>
                     <div class="h-64 relative">
                       <canvas id="distributionChart"></canvas>
                     </div>
@@ -558,23 +578,23 @@ class SlackAIAgent {
                 </div>
 
                 <!-- Recent Members Table -->
-                <div class="glass-panel rounded-2xl overflow-hidden shadow-2xl">
-                  <div class="p-6 border-b border-slate-800">
-                    <h4 class="text-sm font-semibold text-slate-300 uppercase tracking-wider">Recent Analyzed Members</h4>
+                <div class="dashboard-card rounded-2xl overflow-hidden shadow-md">
+                  <div class="p-6 border-b border-slate-200 bg-white">
+                    <h4 class="text-sm font-semibold text-brand-maroon uppercase tracking-wider">Recent Analyzed Members</h4>
                   </div>
                   <div class="overflow-x-auto">
                     <table class="w-full text-left border-collapse">
                       <thead>
-                        <tr class="bg-slate-900/40 text-xs font-semibold uppercase tracking-wider text-slate-400 border-b border-slate-800/80">
+                        <tr class="bg-brand-maroon text-xs font-semibold uppercase tracking-wider text-white">
                           <th class="px-6 py-4">Member Name</th>
                           <th class="px-6 py-4">Title</th>
                           <th class="px-6 py-4">Email</th>
                           <th class="px-6 py-4">Fit Score</th>
-                          <th class="px-6 py-4">Date & Time</th>
+                          <th class="px-6 py-4">Date & Time (IST)</th>
                         </tr>
                       </thead>
-                      <tbody class="divide-y divide-slate-800/60 text-sm">
-                        ${recentRowsHTML || '<tr><td colspan="5" class="px-6 py-8 text-center text-slate-500">No member analysis records found in the database.</td></tr>'}
+                      <tbody class="divide-y divide-slate-200 text-sm bg-white">
+                        ${recentRowsHTML || '<tr><td colspan="5" class="px-6 py-8 text-center text-slate-500 bg-white">No member analysis records found in the database.</td></tr>'}
                       </tbody>
                     </table>
                   </div>
@@ -614,12 +634,12 @@ class SlackAIAgent {
                       datasets: [{
                         label: 'New Members',
                         data: ${JSON.stringify(trendValues)},
-                        borderColor: 'rgba(99, 102, 241, 1)',
-                        backgroundColor: 'rgba(99, 102, 241, 0.1)',
+                        borderColor: '#800020',
+                        backgroundColor: 'rgba(128, 0, 32, 0.05)',
                         borderWidth: 3,
                         fill: true,
                         tension: 0.4,
-                        pointBackgroundColor: 'rgba(99, 102, 241, 1)',
+                        pointBackgroundColor: '#800020',
                         pointHoverRadius: 7
                       }]
                     },
@@ -631,12 +651,12 @@ class SlackAIAgent {
                       },
                       scales: {
                         x: {
-                          grid: { color: 'rgba(255, 255, 255, 0.05)' },
-                          ticks: { color: 'rgba(148, 163, 184, 0.8)' }
+                          grid: { color: 'rgba(0, 0, 0, 0.05)' },
+                          ticks: { color: '#4A4A4A' }
                         },
                         y: {
-                          grid: { color: 'rgba(255, 255, 255, 0.05)' },
-                          ticks: { color: 'rgba(148, 163, 184, 0.8)', stepSize: 1 },
+                          grid: { color: 'rgba(0, 0, 0, 0.05)' },
+                          ticks: { color: '#4A4A4A', stepSize: 1 },
                           beginAtZero: true
                         }
                       }
@@ -652,13 +672,13 @@ class SlackAIAgent {
                       datasets: [{
                         data: ${JSON.stringify(distValues)},
                         backgroundColor: [
-                          'rgba(244, 63, 94, 0.85)',   
-                          'rgba(249, 115, 22, 0.85)',  
-                          'rgba(234, 179, 8, 0.85)',   
-                          'rgba(99, 102, 241, 0.85)',  
-                          'rgba(16, 185, 129, 0.85)'   
+                          '#E53E3E',   
+                          '#DD6B20',   
+                          '#ECC94B',   
+                          '#3182CE',   
+                          '#0A7E3C'    
                         ],
-                        borderColor: 'rgba(15, 23, 42, 0.8)',
+                        borderColor: '#FFFFFF',
                         borderWidth: 2
                       }]
                     },
@@ -668,7 +688,7 @@ class SlackAIAgent {
                       plugins: {
                         legend: {
                           position: 'bottom',
-                          labels: { color: 'rgba(226, 232, 240, 0.8)', padding: 15 }
+                          labels: { color: '#4A4A4A', padding: 15 }
                         }
                       },
                       cutout: '65%'
