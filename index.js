@@ -15,6 +15,7 @@ import pool, {
   closeDatabase,
   getLastAnalysisTime,
   getMemberById,
+  markAutomaticAction,
 } from "./db.js";
 
 import logger from "./src/services/logger.js";
@@ -93,6 +94,9 @@ class SlackAIAgent {
     } else {
       logger.warn("GOOGLE_CREDENTIALS is not defined in environment variables");
     }
+
+    this.autonomousEnabled = process.env.AUTO_ENABLED !== 'false';
+    logger.info(`Autonomous Decision Engine enabled: ${this.autonomousEnabled}`);
 
     this.setupSlackEvents();
     this.setupExpress();
@@ -760,114 +764,18 @@ class SlackAIAgent {
       const researchData = await doBasicResearch(memberInfo);
       const analysis = await analyzeWithAI(this.groq, memberInfo, researchData);
       analysisId = await saveMemberAnalysis(memberInfo, analysis, researchData);
+
+      // Autonomous Decision Engine Point
+      if (this.autonomousEnabled && memberInfo.id) {
+        await this.makeAutonomousDecision(memberInfo, analysis.fitScore, analysisId);
+      } else {
+        console.log(`[AUTO] Disabled for ${memberInfo.name}`);
+      }
+
       await postAnalysisToChannel(this.webClient, memberInfo, analysis, researchData);
       if (analysisId) {
         await markAsSentToSlack(analysisId);
       }
-
-      // ---------- Autonomous AI Agent Decision Engine ----------
-      const autoDmThreshold = parseInt(process.env.AUTO_DM_THRESHOLD) || 85;
-      const salesTagThreshold = parseInt(process.env.SALES_TAG_THRESHOLD) || 60;
-
-      const tools = {
-        send_dm: async (userId, message) => {
-          logger.info(`Autonomous Agent executing send_dm tool for user ${userId}`);
-          await this.webClient.chat.postMessage({ channel: userId, text: message });
-          return 'DM sent successfully';
-        },
-        tag_sales_team: async (memberName, fitScore) => {
-          logger.info(`Autonomous Agent executing tag_sales_team tool for member ${memberName}`);
-          const channel = process.env.SLACK_PRIVATE_CHANNEL_ID;
-          await this.webClient.chat.postMessage({
-            channel: channel,
-            text: `🔔 @sales High-fit lead detected!\n*${memberName}* (Fit: ${fitScore}/100) needs immediate follow-up.`
-          });
-          return 'Sales team tagged';
-        },
-        add_to_crm: async (memberName, fitScore, email = 'N/A', title = 'N/A') => {
-          logger.info(`Autonomous Agent executing add_to_crm tool for member ${memberName}`);
-          if (!this.sheetsAuth) {
-            logger.warn('sheetsAuth is not configured, skipping CRM addition');
-            return 'Skipped (Auth not configured)';
-          }
-          try {
-            const sheetId = process.env.GOOGLE_SHEET_ID;
-            const auth = await this.sheetsAuth.getClient();
-            const sheets = google.sheets({ version: 'v4', auth });
-            
-            await sheets.spreadsheets.values.append({
-              spreadsheetId: sheetId,
-              range: 'Sheet1!A:F',
-              valueInputOption: 'USER_ENTERED',
-              requestBody: {
-                values: [[
-                  new Date().toISOString(),
-                  memberName,
-                  email,
-                  title,
-                  isNaN(parseInt(fitScore)) ? 0 : parseInt(fitScore),
-                  'autonomous_agent'
-                ]]
-              }
-            });
-            return 'Added to CRM';
-          } catch (sheetsErr) {
-            logger.error(`Autonomous Agent failed to append to Google Sheets: ${sheetsErr.message}`);
-            return `Failed: ${sheetsErr.message}`;
-          }
-        }
-      };
-
-      try {
-        const decisionPrompt = `You are an autonomous sales agent. Based on the fit score: ${analysis.fitScore}, decide the best action: send_dm, tag_sales_team, or do_nothing.
-If the fit score is >= ${autoDmThreshold}, the action MUST be send_dm.
-If the fit score is >= ${salesTagThreshold} but < ${autoDmThreshold}, the action MUST be tag_sales_team.
-Otherwise, the action should be do_nothing.
-
-Provide a highly personalized message if the action is send_dm. The message should introduce the product and offer assistance, keeping the tone warm and professional.
-
-Return ONLY a valid JSON object matching this schema, without any backticks, markdown formatting, or preamble:
-{
-  "action": "send_dm" | "tag_sales_team" | "do_nothing",
-  "message": "personalized direct message text here, only if action is send_dm, otherwise empty string"
-}`;
-
-        logger.info(`Querying Groq for autonomous action decision. Fit score: ${analysis.fitScore}`);
-        const response = await this.groq.invoke(decisionPrompt);
-        let rawResponse = response.content.trim();
-        
-        // Strip out code block wrappers if any
-        if (rawResponse.startsWith('```')) {
-          rawResponse = rawResponse.replace(/^```json\s*/i, '').replace(/```$/, '').trim();
-        }
-
-        logger.info(`Raw decision engine response: ${rawResponse}`);
-        const parsed = JSON.parse(rawResponse);
-        
-        const action = parsed.action;
-        const message = parsed.message || '';
-
-        logger.info(`Autonomous Agent decided action: ${action}`);
-
-        if (action === 'send_dm') {
-          await tools.send_dm(memberInfo.id, message);
-          await tools.add_to_crm(memberInfo.name, analysis.fitScore, memberInfo.email, memberInfo.title);
-        } else if (action === 'tag_sales_team') {
-          await tools.tag_sales_team(memberInfo.name, analysis.fitScore);
-          await tools.add_to_crm(memberInfo.name, analysis.fitScore, memberInfo.email, memberInfo.title);
-        } else {
-          logger.info(`Autonomous Agent took action: do_nothing for ${memberInfo.name}`);
-        }
-      } catch (decisionError) {
-        logger.error(`Decision Engine failed: ${decisionError.message}. Executing fallback: tag_sales_team`);
-        try {
-          await tools.tag_sales_team(memberInfo.name, analysis.fitScore);
-          await tools.add_to_crm(memberInfo.name, analysis.fitScore, memberInfo.email, memberInfo.title);
-        } catch (fallbackError) {
-          logger.error(`Fallback execution failed: ${fallbackError.message}`);
-        }
-      }
-
       return analysis;
     } catch (error) {
       logger.error(`Error processing ${memberInfo.name}: ${error.message}`);
@@ -877,6 +785,88 @@ Return ONLY a valid JSON object matching this schema, without any backticks, mar
         );
       }
       throw error;
+    }
+  }
+
+  // Tool 1: Send Direct Message
+  async sendAutoDM(userId, memberName, fitScore) {
+    try {
+      const message = `Hi ${memberName}! 👋\n\nThanks for joining Code with Vijay community. Based on your profile (Fit Score: ${fitScore}/100), we think you'd love our premium coding course.\n\n🎁 Here's your **exclusive free trial**: [Insert Link Here]\n\nLet me know if you have any questions!`;
+      await this.webClient.chat.postMessage({
+        channel: userId,
+        text: message
+      });
+      console.log(`[AUTO] DM sent to ${memberName}`);
+      return true;
+    } catch (error) {
+      console.error('[AUTO] DM failed:', error.message);
+      return false;
+    }
+  }
+
+  // Tool 2: Tag Sales Team
+  async tagSalesTeam(memberName, fitScore, email) {
+    try {
+      const channelId = process.env.SLACK_PRIVATE_CHANNEL_ID;
+      const message = {
+        channel: channelId,
+        text: `🔔 *High-Fit Lead Alert!*\n\n👤 *Name:* ${memberName}\n📊 *Fit Score:* ${fitScore}/100\n📧 *Email:* ${email || 'N/A'}\n\n@channel Please follow up ASAP! 🚀`,
+        blocks: [
+          {
+            type: 'section',
+            text: {
+              type: 'mrkdwn',
+              text: `🔔 *High-Fit Lead Alert!*\n\n👤 *Name:* ${memberName}\n📊 *Fit Score:* ${fitScore}/100\n📧 *Email:* ${email || 'N/A'}`
+            }
+          },
+          {
+            type: 'context',
+            elements: [{ type: 'mrkdwn', text: '🚨 Please follow up ASAP!' }]
+          }
+        ]
+      };
+      await this.webClient.chat.postMessage(message);
+      console.log(`[AUTO] Sales team tagged for ${memberName}`);
+      return true;
+    } catch (error) {
+      console.error('[AUTO] Sales tag failed:', error.message);
+      return false;
+    }
+  }
+
+  // Decision Engine
+  async makeAutonomousDecision(memberInfo, fitScore, analysisId) {
+    const thresholdDM = parseInt(process.env.AUTO_DM_THRESHOLD) || 85;
+    const thresholdSales = parseInt(process.env.SALES_TAG_THRESHOLD) || 60;
+    
+    console.log(`[AUTO] Decision for ${memberInfo.name}: Fit=${fitScore}, DM=${thresholdDM}, Sales=${thresholdSales}`);
+    
+    try {
+      // 1. High Fit -> Auto DM
+      if (fitScore >= thresholdDM) {
+        await this.sendAutoDM(memberInfo.id, memberInfo.name, fitScore);
+        await markAutomaticAction(analysisId, 'auto_dm', 'DM sent to member');
+        console.log(`[AUTO] Decision: AUTO_DM for ${memberInfo.name}`);
+        return 'auto_dm';
+      }
+      
+      // 2. Medium Fit -> Tag Sales
+      else if (fitScore >= thresholdSales) {
+        await this.tagSalesTeam(memberInfo.name, fitScore, memberInfo.email);
+        await markAutomaticAction(analysisId, 'tag_sales', 'Sales team notified');
+        console.log(`[AUTO] Decision: TAG_SALES for ${memberInfo.name}`);
+        return 'tag_sales';
+      }
+      
+      // 3. Low Fit -> Do Nothing (just save in DB)
+      else {
+        await markAutomaticAction(analysisId, 'ignored', 'Low fit score, no action taken');
+        console.log(`[AUTO] Decision: IGNORE for ${memberInfo.name}`);
+        return 'ignored';
+      }
+    } catch (error) {
+      console.error('[AUTO] Decision engine error:', error.message);
+      return 'error';
     }
   }
 

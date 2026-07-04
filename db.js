@@ -51,7 +51,18 @@ export async function initDatabase() {
       CREATE INDEX IF NOT EXISTS idx_analyzed_at ON member_analyses(analyzed_at);
     `);
 
-    logger.info('Database schema initialized');
+    // Migration for autonomous decision columns
+    await client.query(`
+      ALTER TABLE member_analyses ADD COLUMN IF NOT EXISTS auto_action VARCHAR(50);
+    `);
+    await client.query(`
+      ALTER TABLE member_analyses ADD COLUMN IF NOT EXISTS auto_action_note TEXT;
+    `);
+    await client.query(`
+      ALTER TABLE member_analyses ADD COLUMN IF NOT EXISTS auto_action_at TIMESTAMP;
+    `);
+
+    logger.info('Database schema initialized and migrated');
   } catch (error) {
     logger.error(`Failed to initialize database: ${error.message}`);
     throw error;
@@ -152,6 +163,23 @@ export async function getMemberById(memberId) {
     return null;
   } catch (error) {
     logger.error(`Failed to get member analysis by ID: ${error.message}`);
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+export async function markAutomaticAction(analysisId, actionType, actionNote) {
+  const client = await pool.connect();
+  try {
+    await client.query(
+      `UPDATE member_analyses 
+       SET auto_action = $1, auto_action_note = $2, auto_action_at = CURRENT_TIMESTAMP 
+       WHERE id = $3`,
+      [actionType, actionNote, analysisId]
+    );
+  } catch (error) {
+    logger.error(`Failed to mark automatic action: ${error.message}`);
     throw error;
   } finally {
     client.release();
