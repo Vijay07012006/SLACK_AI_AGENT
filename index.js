@@ -344,6 +344,351 @@ class SlackAIAgent {
       res.json({ status: "healthy", timestamp: new Date().toISOString() });
     });
 
+    // Web Dashboard
+    this.app.get("/dashboard", async (req, res) => {
+      let client = null;
+      try {
+        client = await pool.connect();
+        
+        const total = await client.query('SELECT COUNT(*) FROM member_analyses');
+        const avg = await client.query('SELECT AVG(fit_score) FROM member_analyses');
+        const high = await client.query('SELECT COUNT(*) FROM member_analyses WHERE fit_score >= 80');
+        const today = await client.query("SELECT COUNT(*) FROM member_analyses WHERE DATE(analyzed_at) = CURRENT_DATE");
+        const trend = await client.query(`
+          SELECT DATE(analyzed_at) as date, COUNT(*) as count 
+          FROM member_analyses 
+          WHERE analyzed_at >= NOW() - INTERVAL '7 days' 
+          GROUP BY DATE(analyzed_at) 
+          ORDER BY date
+        `);
+        const recent = await client.query('SELECT member_name, fit_score, analyzed_at, member_email, member_title FROM member_analyses ORDER BY analyzed_at DESC LIMIT 10');
+        const distribution = await client.query(`
+          SELECT 
+            CASE 
+              WHEN fit_score <= 20 THEN '0-20'
+              WHEN fit_score <= 40 THEN '21-40'
+              WHEN fit_score <= 60 THEN '41-60'
+              WHEN fit_score <= 80 THEN '61-80'
+              ELSE '81-100'
+            END as range,
+            COUNT(*) as count
+          FROM member_analyses 
+          GROUP BY range
+          ORDER BY range
+        `);
+
+        const totalCount = parseInt(total.rows[0].count) || 0;
+        const avgScore = Math.round(parseFloat(avg.rows[0].avg)) || 0;
+        const highFitCount = parseInt(high.rows[0].count) || 0;
+        const todayCount = parseInt(today.rows[0].count) || 0;
+
+        // Format trend labels and values
+        const trendLabels = trend.rows.map(r => {
+          const d = new Date(r.date);
+          return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+        });
+        const trendValues = trend.rows.map(r => parseInt(r.count));
+
+        // Format distribution labels and values
+        const distBuckets = { '0-20': 0, '21-40': 0, '41-60': 0, '61-80': 0, '81-100': 0 };
+        distribution.rows.forEach(r => {
+          if (distBuckets[r.range] !== undefined) {
+            distBuckets[r.range] = parseInt(r.count);
+          }
+        });
+        const distLabels = Object.keys(distBuckets);
+        const distValues = Object.values(distBuckets);
+
+        // Format recent members table rows
+        const recentRowsHTML = recent.rows.map(r => {
+          const dateStr = new Date(r.analyzed_at).toLocaleString(undefined, {
+            month: 'short',
+            day: 'numeric',
+            hour: '2-digit',
+            minute: '2-digit'
+          });
+          
+          let scoreBadgeClass = "bg-rose-500/10 text-rose-400 border-rose-500/20";
+          if (r.fit_score >= 80) {
+            scoreBadgeClass = "bg-emerald-500/10 text-emerald-400 border-emerald-500/20";
+          } else if (r.fit_score >= 50) {
+            scoreBadgeClass = "bg-indigo-500/10 text-indigo-400 border-indigo-500/20";
+          } else if (r.fit_score >= 30) {
+            scoreBadgeClass = "bg-yellow-500/10 text-yellow-400 border-yellow-500/20";
+          }
+
+          return `
+            <tr class="hover:bg-slate-900/20 transition-colors duration-200">
+              <td class="px-6 py-4 font-medium text-slate-200">${r.member_name}</td>
+              <td class="px-6 py-4 text-slate-400">${r.member_title || 'N/A'}</td>
+              <td class="px-6 py-4 text-slate-400">${r.member_email || 'N/A'}</td>
+              <td class="px-6 py-4">
+                <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold border ${scoreBadgeClass}">
+                  ${r.fit_score}/100
+                </span>
+              </td>
+              <td class="px-6 py-4 text-slate-400">${dateStr}</td>
+            </tr>
+          `;
+        }).join('\n');
+
+        res.send(`
+          <!DOCTYPE html>
+          <html lang="en" class="h-full">
+            <head>
+              <meta charset="UTF-8">
+              <meta name="viewport" content="width=device-width, initial-scale=1.0">
+              <title>📊 Slack AI Dashboard</title>
+              <script src="https://cdn.tailwindcss.com"></script>
+              <link rel="preconnect" href="https://fonts.googleapis.com">
+              <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+              <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+              <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+              <script>
+                tailwind.config = {
+                  theme: {
+                    extend: {
+                      fontFamily: {
+                        sans: ['Inter', 'sans-serif'],
+                      },
+                    },
+                  },
+                }
+              </script>
+              <style>
+                .glass-panel {
+                  background: rgba(15, 23, 42, 0.65);
+                  backdrop-filter: blur(12px);
+                  -webkit-backdrop-filter: blur(12px);
+                  border: 1px solid rgba(255, 255, 255, 0.08);
+                }
+                .glass-panel:hover {
+                  border-color: rgba(99, 102, 241, 0.3);
+                  box-shadow: 0 0 20px rgba(99, 102, 241, 0.1);
+                }
+                body {
+                  font-family: 'Inter', sans-serif;
+                }
+              </style>
+            </head>
+            <body class="bg-gradient-to-br from-slate-950 via-slate-900 to-indigo-950 min-h-full text-slate-100 p-4 md:p-8">
+              <div class="max-w-7xl mx-auto space-y-8">
+                
+                <!-- Top Header -->
+                <div class="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 border-b border-slate-800/80 pb-6">
+                  <div>
+                    <h1 class="text-3xl font-extrabold tracking-tight bg-gradient-to-r from-indigo-400 via-purple-400 to-pink-400 bg-clip-text text-transparent flex items-center gap-2">
+                      📊 Slack AI Dashboard
+                    </h1>
+                    <p class="text-sm text-slate-400 mt-1">Real-time workspace insights and community lead analysis</p>
+                  </div>
+                  <div class="text-xs md:text-sm text-slate-400 bg-slate-900/60 px-4 py-2 rounded-full border border-slate-800">
+                    🕒 Last Updated: <span class="text-indigo-400 font-semibold">${new Date().toLocaleString()}</span>
+                  </div>
+                </div>
+
+                <!-- Stats Row -->
+                <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+                  <!-- Card 1 -->
+                  <div class="glass-panel p-6 rounded-2xl transition-all duration-300">
+                    <div class="flex justify-between items-start">
+                      <div>
+                        <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider">Total Members</p>
+                        <h3 class="text-3xl font-bold text-slate-100 mt-2 counter" data-target="${totalCount}">${totalCount}</h3>
+                      </div>
+                      <div class="p-3 bg-indigo-500/10 text-indigo-400 rounded-xl">
+                        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"></path></svg>
+                      </div>
+                    </div>
+                  </div>
+                  <!-- Card 2 -->
+                  <div class="glass-panel p-6 rounded-2xl transition-all duration-300">
+                    <div class="flex justify-between items-start">
+                      <div>
+                        <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider">Average Fit Score</p>
+                        <h3 class="text-3xl font-bold text-slate-100 mt-2"><span class="counter" data-target="${avgScore}">${avgScore}</span><span class="text-lg text-slate-500">/100</span></h3>
+                      </div>
+                      <div class="p-3 bg-purple-500/10 text-purple-400 rounded-xl">
+                        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"></path></svg>
+                      </div>
+                    </div>
+                  </div>
+                  <!-- Card 3 -->
+                  <div class="glass-panel p-6 rounded-2xl transition-all duration-300">
+                    <div class="flex justify-between items-start">
+                      <div>
+                        <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider">High Fit Leads (≥80)</p>
+                        <h3 class="text-3xl font-bold text-slate-100 mt-2 counter" data-target="${highFitCount}">${highFitCount}</h3>
+                      </div>
+                      <div class="p-3 bg-emerald-500/10 text-emerald-400 rounded-xl">
+                        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                      </div>
+                    </div>
+                  </div>
+                  <!-- Card 4 -->
+                  <div class="glass-panel p-6 rounded-2xl transition-all duration-300">
+                    <div class="flex justify-between items-start">
+                      <div>
+                        <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider">New Leads Today</p>
+                        <h3 class="text-3xl font-bold text-slate-100 mt-2 counter" data-target="${todayCount}">${todayCount}</h3>
+                      </div>
+                      <div class="p-3 bg-rose-500/10 text-rose-400 rounded-xl">
+                        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- Charts Row -->
+                <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                  <!-- Line Chart Container -->
+                  <div class="glass-panel p-6 rounded-2xl lg:col-span-2">
+                    <h4 class="text-sm font-semibold text-slate-300 mb-4 uppercase tracking-wider">7-Day Growth Trend</h4>
+                    <div class="h-64 relative">
+                      <canvas id="growthChart"></canvas>
+                    </div>
+                  </div>
+                  <!-- Doughnut Chart Container -->
+                  <div class="glass-panel p-6 rounded-2xl">
+                    <h4 class="text-sm font-semibold text-slate-300 mb-4 uppercase tracking-wider">Fit Score Distribution</h4>
+                    <div class="h-64 relative">
+                      <canvas id="distributionChart"></canvas>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- Recent Members Table -->
+                <div class="glass-panel rounded-2xl overflow-hidden shadow-2xl">
+                  <div class="p-6 border-b border-slate-800">
+                    <h4 class="text-sm font-semibold text-slate-300 uppercase tracking-wider">Recent Analyzed Members</h4>
+                  </div>
+                  <div class="overflow-x-auto">
+                    <table class="w-full text-left border-collapse">
+                      <thead>
+                        <tr class="bg-slate-900/40 text-xs font-semibold uppercase tracking-wider text-slate-400 border-b border-slate-800/80">
+                          <th class="px-6 py-4">Member Name</th>
+                          <th class="px-6 py-4">Title</th>
+                          <th class="px-6 py-4">Email</th>
+                          <th class="px-6 py-4">Fit Score</th>
+                          <th class="px-6 py-4">Date & Time</th>
+                        </tr>
+                      </thead>
+                      <tbody class="divide-y divide-slate-800/60 text-sm">
+                        ${recentRowsHTML || '<tr><td colspan="5" class="px-6 py-8 text-center text-slate-500">No member analysis records found in the database.</td></tr>'}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
+              </div>
+
+              <script>
+                // Animated Counters
+                document.addEventListener('DOMContentLoaded', () => {
+                  const counters = document.querySelectorAll('.counter');
+                  counters.forEach(counter => {
+                    const target = parseInt(counter.getAttribute('data-target')) || 0;
+                    let count = 0;
+                    const speed = 2000 / (target || 1); 
+                    const increment = Math.max(1, Math.ceil(target / 100));
+
+                    const updateCount = () => {
+                      if (count < target) {
+                        count += increment;
+                        if (count > target) count = target;
+                        counter.innerText = count;
+                        setTimeout(updateCount, Math.min(30, speed * increment));
+                      } else {
+                        counter.innerText = target;
+                      }
+                    };
+                    updateCount();
+                  });
+
+                  // Growth Chart (Line)
+                  const growthCtx = document.getElementById('growthChart').getContext('2d');
+                  new Chart(growthCtx, {
+                    type: 'line',
+                    data: {
+                      labels: ${JSON.stringify(trendLabels)},
+                      datasets: [{
+                        label: 'New Members',
+                        data: ${JSON.stringify(trendValues)},
+                        borderColor: 'rgba(99, 102, 241, 1)',
+                        backgroundColor: 'rgba(99, 102, 241, 0.1)',
+                        borderWidth: 3,
+                        fill: true,
+                        tension: 0.4,
+                        pointBackgroundColor: 'rgba(99, 102, 241, 1)',
+                        pointHoverRadius: 7
+                      }]
+                    },
+                    options: {
+                      responsive: true,
+                      maintainAspectRatio: false,
+                      plugins: {
+                        legend: { display: false }
+                      },
+                      scales: {
+                        x: {
+                          grid: { color: 'rgba(255, 255, 255, 0.05)' },
+                          ticks: { color: 'rgba(148, 163, 184, 0.8)' }
+                        },
+                        y: {
+                          grid: { color: 'rgba(255, 255, 255, 0.05)' },
+                          ticks: { color: 'rgba(148, 163, 184, 0.8)', stepSize: 1 },
+                          beginAtZero: true
+                        }
+                      }
+                    }
+                  });
+
+                  // Distribution Chart (Doughnut)
+                  const distCtx = document.getElementById('distributionChart').getContext('2d');
+                  new Chart(distCtx, {
+                    type: 'doughnut',
+                    data: {
+                      labels: ${JSON.stringify(distLabels)},
+                      datasets: [{
+                        data: ${JSON.stringify(distValues)},
+                        backgroundColor: [
+                          'rgba(244, 63, 94, 0.85)',   
+                          'rgba(249, 115, 22, 0.85)',  
+                          'rgba(234, 179, 8, 0.85)',   
+                          'rgba(99, 102, 241, 0.85)',  
+                          'rgba(16, 185, 129, 0.85)'   
+                        ],
+                        borderColor: 'rgba(15, 23, 42, 0.8)',
+                        borderWidth: 2
+                      }]
+                    },
+                    options: {
+                      responsive: true,
+                      maintainAspectRatio: false,
+                      plugins: {
+                        legend: {
+                          position: 'bottom',
+                          labels: { color: 'rgba(226, 232, 240, 0.8)', padding: 15 }
+                        }
+                      },
+                      cutout: '65%'
+                    }
+                  });
+
+                });
+              </script>
+            </body>
+          </html>
+        `);
+      } catch (error) {
+        res.status(500).send('Dashboard Error: ' + error.message);
+      } finally {
+        if (client) {
+          client.release();
+        }
+      }
+    });
+
     // Test endpoint (only in development)
     if (process.env.NODE_ENV === "development") {
       this.app.post("/test/analyze-member", async (req, res, next) => {
