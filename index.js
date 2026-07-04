@@ -7,8 +7,8 @@ import express from "express";
 import dotenv from "dotenv";
 import PQueue from 'p-queue';
 import { google } from "googleapis";
-
-import {
+import cron from "node-cron";
+import pool, {
   initDatabase,
   saveMemberAnalysis,
   markAsSentToSlack,
@@ -287,10 +287,15 @@ class SlackAIAgent {
 
       // Fallbacks using regex from command text / message text as defined in prompt
       if (memberName === 'N/A') {
-        memberName = body.message?.text?.match(/\*Member Name:\*\s(.*?)\n/)?.[1] || 'N/A';
+        memberName = body.message?.text?.match(/\*Member Name:\*\s(.*?)\n/)?.[1] || 
+                     body.message?.text?.match(/New Member Analysis:\s*(.*?)\s*\(\d+\/100\)/i)?.[1] ||
+                     body.message?.text?.match(/New Member Analysis:\s*(.*)/i)?.[1] ||
+                     'N/A';
       }
       if (fitScore === 'N/A') {
-        fitScore = body.message?.text?.match(/\*Fit Score:\*\s(\d+)/)?.[1] || 'N/A';
+        fitScore = body.message?.text?.match(/\*Fit Score:\*\s(\d+)/)?.[1] || 
+                   body.message?.text?.match(/\((\d+)\/100\)/)?.[1] ||
+                   'N/A';
       }
 
       try {
@@ -406,6 +411,62 @@ class SlackAIAgent {
     }
   }
 
+  // ---------- Daily Digest Feature ----------
+  async sendDailyDigest() {
+    let client = null;
+    try {
+      client = await pool.connect();
+      const yesterday = new Date(Date.now() - 24*60*60*1000).toISOString();
+      
+      // Past 24 hours ke members fetch karo
+      const result = await client.query(
+        `SELECT member_name, fit_score, analyzed_at FROM member_analyses 
+         WHERE analyzed_at > $1 ORDER BY fit_score DESC`,
+        [yesterday]
+      );
+      
+      if (result.rows.length === 0) {
+        await this.webClient.chat.postMessage({
+          channel: process.env.SLACK_PRIVATE_CHANNEL_ID,
+          text: '📊 *Daily Digest*: No new members joined in the last 24 hours.'
+        });
+        return;
+      }
+      
+      const total = result.rows.length;
+      const avgScore = Math.round(result.rows.reduce((a,b) => a + b.fit_score, 0) / total);
+      const highFit = result.rows.filter(r => r.fit_score >= 80);
+      
+      let text = `📊 *Daily Member Analysis Report*\n`;
+      text += `---------------------------------------------------\n`;
+      text += `🔹 Total New Members: ${total}\n`;
+      text += `🔹 Average Fit Score: ${avgScore}\n`;
+      text += `🔹 High Fit (>80): ${highFit.length} members\n`;
+      
+      if (highFit.length > 0) {
+        text += `  • ${highFit.map(r => `${r.member_name} (${r.fit_score}) ⭐`).join('\n  • ')}\n`;
+      }
+      
+      const totalCount = await client.query(`SELECT COUNT(*) FROM member_analyses`);
+      text += `---------------------------------------------------\n`;
+      text += `Total members in system: ${totalCount.rows[0].count}`;
+      
+      await this.webClient.chat.postMessage({
+        channel: process.env.SLACK_PRIVATE_CHANNEL_ID,
+        text: text,
+        unfurl_links: false
+      });
+      
+      logger.info('Daily digest sent successfully.');
+    } catch (error) {
+      logger.error(`Daily digest failed: ${error.message}`);
+    } finally {
+      if (client) {
+        client.release();
+      }
+    }
+  }
+
   // ---------- Start bot (Slack first, then Express) ----------
   async start() {
     try {
@@ -415,6 +476,12 @@ class SlackAIAgent {
       // Start Slack socket connection first
       await this.slackApp.start();
       logger.info("Slack bot successfully started");
+
+      // Daily digest cron schedule (3:30 AM UTC = 9:00 AM IST)
+      cron.schedule('30 3 * * *', async () => {
+        logger.info('[CRON] Running daily digest...');
+        await this.sendDailyDigest();
+      });
 
       // Then start Express server
       const port = process.env.PORT || 3000;
