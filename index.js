@@ -982,27 +982,25 @@ class SlackAIAgent {
         try {
           const client = await pool.connect();
           const result = await client.query(
-            `SELECT member_name, id, follow_up_date FROM member_analyses 
+            `SELECT member_name, follow_up_date FROM member_analyses 
              WHERE follow_up_date < NOW() AND follow_up_date IS NOT NULL 
              AND auto_dm_sent = TRUE`
           );
           client.release();
-
           if (result.rows.length === 0) return;
-
+          
           let text = '⏰ *Follow-up Reminders:*\n';
           result.rows.forEach(row => {
             const date = new Date(row.follow_up_date).toLocaleDateString('en-IN');
             text += `• Follow up with *${row.member_name}* (Auto-DM sent on ${date})\n`;
           });
-
           await this.webClient.chat.postMessage({
             channel: process.env.SLACK_PRIVATE_CHANNEL_ID,
             text: text
           });
-          console.log('[CRON] Follow-up reminders sent');
+          logger.info('[CRON] Follow-up reminders sent');
         } catch (error) {
-          console.error('[CRON] Follow-up error:', error.message);
+          logger.error('[CRON] Follow-up error:', error.message);
         }
       });
 
