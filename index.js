@@ -120,37 +120,51 @@ class SlackAIAgent {
     this.slackApp.command("/analyze", async ({ command, ack, say, client }) => {
       await ack();
       try {
-        // 🔥 DEBUG: Yeh console.log Render logs mein dikhega, humein exact text pata chalega
+        // 🔥 DEBUG: Exact text log karo
         console.log('[DEBUG] Raw slash text received:', command.text);
 
-        const text = command.text || "";
+        const text = (command.text || "").trim();
         let userId = null;
+        let username = null;
 
-        // 1. Standard Slack mention format: <@U12345> ya <@U12345|DisplayName>
+        // 1. Try to find User ID format: <@U12345> or @U12345 or U12345
         let match = text.match(/<@(U[A-Z0-9]+)(?:\|.*?)?>/);
+        if (!match) match = text.match(/@?(U[A-Z0-9]+)/);
         if (match) {
           userId = match[1];
         }
 
-        // 2. Agar upar se na mile, toh try @U12345 (bina brackets ke)
+        // 2. Agar User ID nahi mili, toh maan lo username hai (e.g., @vkc80905)
         if (!userId) {
-          match = text.match(/@(U[A-Z0-9]+)/);
+          match = text.match(/^@?([a-zA-Z0-9_.-]+)$/);
           if (match) {
-            userId = match[1];
+            username = match[1];
           }
         }
 
-        // 3. Agar ab bhi na mile, toh sirf U12345 (bina @ ke) check karo
-        if (!userId) {
-          match = text.match(/^(U[A-Z0-9]+)$/);
-          if (match) {
-            userId = match[1];
+        // 3. Agar username mila hai, toh Slack users.list se User ID dhundho
+        if (!userId && username) {
+          try {
+            const result = await client.users.list({ limit: 200 });
+            const foundUser = result.members.find(u => 
+              u.name === username || 
+              u.profile?.display_name === username ||
+              u.real_name === username
+            );
+            if (foundUser) {
+              userId = foundUser.id;
+              console.log('[DEBUG] Found user by username:', username, '-> ID:', userId);
+            } else {
+              console.log('[DEBUG] No user found for username:', username);
+            }
+          } catch (error) {
+            console.error('Error finding user by username:', error);
           }
         }
 
-        // 4. Agar kuch bhi match nahi hua, toh error message ke saath raw text bhi dikhao
+        // 4. Agar ab bhi userId nahi mila, toh error do
         if (!userId) {
-          await say(`❌ Please mention a user using @. I received: "${text}"`);
+          await say(`❌ Could not find user. I received: "${text}". Please mention a valid user.`);
           return;
         }
 
