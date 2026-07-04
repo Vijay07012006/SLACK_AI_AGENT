@@ -765,16 +765,23 @@ class SlackAIAgent {
       const analysis = await analyzeWithAI(this.groq, memberInfo, researchData);
       analysisId = await saveMemberAnalysis(memberInfo, analysis, researchData);
 
-      // Autonomous Decision Engine Point
-      if (this.autonomousEnabled) {
-        await this.makeAutonomousDecision(memberInfo, analysis.fitScore, analysisId);
-      } else {
-        console.log(`[AUTO] Disabled for ${memberInfo.name}`);
-      }
-
       await postAnalysisToChannel(this.webClient, memberInfo, analysis, researchData);
       if (analysisId) {
         await markAsSentToSlack(analysisId);
+      }
+
+      // 🔥 DEBUG: Force autonomous decision
+      console.log('[AUTO] 🔥 Entering autonomous decision block');
+      if (this.autonomousEnabled) {
+        console.log('[AUTO] ✅ Autonomous is enabled, calling makeAutonomousDecision...');
+        try {
+          await this.makeAutonomousDecision(memberInfo, analysis.fitScore, analysisId);
+          console.log('[AUTO] ✅ makeAutonomousDecision completed');
+        } catch (err) {
+          console.error('[AUTO] ❌ makeAutonomousDecision error:', err.message);
+        }
+      } else {
+        console.log('[AUTO] ❌ Autonomous is disabled');
       }
       return analysis;
     } catch (error) {
@@ -790,6 +797,10 @@ class SlackAIAgent {
 
   // Tool 1: Send Direct Message
   async sendAutoDM(userId, memberName, fitScore) {
+    if (!userId) {
+      console.log('[AUTO] ⚠️ No userId, skipping DM');
+      return false;
+    }
     try {
       const message = `Hi ${memberName}! 👋\n\nThanks for joining Code with Vijay community. Based on your profile (Fit Score: ${fitScore}/100), we think you'd love our premium coding course.\n\n🎁 Here's your **exclusive free trial**: [Insert Link Here]\n\nLet me know if you have any questions!`;
       await this.webClient.chat.postMessage({
@@ -806,6 +817,7 @@ class SlackAIAgent {
 
   // Tool 2: Tag Sales Team
   async tagSalesTeam(memberName, fitScore, email) {
+    console.log(`[AUTO] 📢 Tagging sales team for ${memberName}, Score: ${fitScore}`);
     try {
       const channelId = process.env.SLACK_PRIVATE_CHANNEL_ID;
       const message = {
@@ -836,6 +848,7 @@ class SlackAIAgent {
 
   // Decision Engine
   async makeAutonomousDecision(memberInfo, fitScore, analysisId) {
+    console.log(`[AUTO] 🔥 makeAutonomousDecision called for ${memberInfo.name}, fitScore: ${fitScore}`);
     const thresholdDM = parseInt(process.env.AUTO_DM_THRESHOLD) || 85;
     const thresholdSales = parseInt(process.env.SALES_TAG_THRESHOLD) || 60;
     
