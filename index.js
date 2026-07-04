@@ -6,6 +6,7 @@ import { ChatGroq } from "@langchain/groq";
 import express from "express";
 import dotenv from "dotenv";
 import PQueue from 'p-queue';
+import { google } from "googleapis";
 
 import {
   initDatabase,
@@ -77,6 +78,21 @@ class SlackAIAgent {
     // P-Queue for Slack Events (Bug 11)
     this.queue = new PQueue({ concurrency: 1 });
     logger.info("Initializing PQueue with concurrency 1");
+
+    // Google Sheets Auth Setup
+    if (process.env.GOOGLE_CREDENTIALS) {
+      try {
+        this.sheetsAuth = new google.auth.GoogleAuth({
+          credentials: JSON.parse(process.env.GOOGLE_CREDENTIALS),
+          scopes: ['https://www.googleapis.com/auth/spreadsheets'],
+        });
+        logger.info("Initialized Google Sheets Auth client");
+      } catch (error) {
+        logger.error(`Failed to initialize Google Sheets Auth: ${error.message}`);
+      }
+    } else {
+      logger.warn("GOOGLE_CREDENTIALS is not defined in environment variables");
+    }
 
     this.setupSlackEvents();
     this.setupExpress();
@@ -229,7 +245,79 @@ class SlackAIAgent {
     this.slackApp.action('crm_add', async ({ ack, body, say }) => {
       await ack();
       const user = body.user?.name || 'Someone';
-      await say(`✅ <@${body.user.id}> added this member to CRM! (This is just a prototype. We can integrate Google Sheets/CRM here later.)`);
+      const sheetId = process.env.GOOGLE_SHEET_ID;
+
+      if (!this.sheetsAuth) {
+        logger.error("sheetsAuth is not configured");
+        await say(`❌ Google Sheets CRM is not configured. Please check environment variables.`);
+        return;
+      }
+
+      // Parse blocks or fallback to message text to extract member info
+      const blocks = body.message?.blocks || [];
+      let memberName = 'N/A';
+      let fitScore = 'N/A';
+      let email = 'N/A';
+      let title = 'N/A';
+
+      // 1. Extract from header block: "New Member Analysis: <Name>"
+      if (blocks[0]?.text?.text) {
+        const nameMatch = blocks[0].text.text.match(/New Member Analysis:\s*(.*)/i);
+        if (nameMatch) {
+          memberName = nameMatch[1].trim();
+        }
+      }
+
+      // 2. Extract from fields in section block: "*Fit Score:* ...", "*Email:* ...", "*Title:* ..."
+      const sectionBlock = blocks.find(b => b.type === 'section' && b.fields);
+      if (sectionBlock) {
+        for (const field of sectionBlock.fields) {
+          if (field.text) {
+            const fitMatch = field.text.match(/\*Fit Score:\*\s*(\d+)/i);
+            if (fitMatch) fitScore = fitMatch[1];
+            
+            const emailMatch = field.text.match(/\*Email:\*\s*(.*)/i);
+            if (emailMatch) email = emailMatch[1].trim();
+
+            const titleMatch = field.text.match(/\*Title:\*\s*(.*)/i);
+            if (titleMatch) title = titleMatch[1].trim();
+          }
+        }
+      }
+
+      // Fallbacks using regex from command text / message text as defined in prompt
+      if (memberName === 'N/A') {
+        memberName = body.message?.text?.match(/\*Member Name:\*\s(.*?)\n/)?.[1] || 'N/A';
+      }
+      if (fitScore === 'N/A') {
+        fitScore = body.message?.text?.match(/\*Fit Score:\*\s(\d+)/)?.[1] || 'N/A';
+      }
+
+      try {
+        const auth = await this.sheetsAuth.getClient();
+        const sheets = google.sheets({ version: 'v4', auth });
+        
+        const response = await sheets.spreadsheets.values.append({
+          spreadsheetId: sheetId,
+          range: 'Sheet1!A:F',
+          valueInputOption: 'USER_ENTERED',
+          requestBody: {
+            values: [[
+              new Date().toISOString(),
+              memberName,
+              email,
+              title,
+              isNaN(parseInt(fitScore)) ? 0 : parseInt(fitScore),
+              body.user.id
+            ]]
+          }
+        });
+        
+        await say(`✅ <@${body.user.id}> added *${memberName}* (Fit: ${fitScore}) to Google Sheets CRM!`);
+      } catch (error) {
+        console.error('Google Sheets Error:', error);
+        await say(`❌ Could not add to CRM. Error: ${error.message}`);
+      }
     });
 
     this.slackApp.action('email_send', async ({ ack, body, say }) => {
