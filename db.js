@@ -186,6 +186,22 @@ export async function markAutomaticAction(analysisId, actionType, actionNote) {
   }
 }
 
+export async function getAnalysisByMemberId(memberId) {
+  const client = await pool.connect();
+  try {
+    const result = await client.query(
+      'SELECT id, fit_score FROM member_analyses WHERE member_id = $1 ORDER BY analyzed_at DESC LIMIT 1',
+      [memberId]
+    );
+    return result.rows[0] || null;
+  } catch (error) {
+    logger.error(`Failed to get analysis by member ID: ${error.message}`);
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 export async function closeDatabase() {
   await pool.end();
   logger.info('Database connection pool closed');

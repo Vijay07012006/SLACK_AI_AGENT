@@ -16,6 +16,7 @@ import pool, {
   getLastAnalysisTime,
   getMemberById,
   markAutomaticAction,
+  getAnalysisByMemberId,
 } from "./db.js";
 
 import logger from "./src/services/logger.js";
@@ -757,6 +758,18 @@ class SlackAIAgent {
         const diffHours = diffMs / (1000 * 60 * 60);
         if (diffHours < 24) {
           logger.info(`Skipping duplicate analysis for user ${memberInfo.name} (${memberInfo.id}) - last analyzed ${diffHours.toFixed(2)} hours ago`);
+          
+          // 🔥 Agar autonomous enabled hai toh existing data ke saath decision lo
+          if (this.autonomousEnabled) {
+            logger.info('[AUTO] Triggering autonomous decision based on existing analysis');
+            const existingAnalysis = await getAnalysisByMemberId(memberInfo.id); // existing fitScore fetch karo
+            if (existingAnalysis) {
+              await this.makeAutonomousDecision(memberInfo, existingAnalysis.fit_score, existingAnalysis.id);
+            } else {
+              logger.warn('[AUTO] Existing analysis not found for duplicate user');
+            }
+          }
+          
           return null;
         }
       }
