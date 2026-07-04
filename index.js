@@ -120,14 +120,20 @@ class SlackAIAgent {
     this.slackApp.command("/analyze", async ({ command, ack, say, client }) => {
       await ack();
       try {
-        const text = command.text || "";
-        const match = text.match(/<@(U[A-Z0-9]+)>/);
-        if (!match) {
-          await say("Please mention a user. Usage: `/analyze @username`");
+        const text = command.text;
+        let userId = null;
+
+        // Regex jo <@U12345> aur <@U12345|DisplayName> dono ko handle kare
+        const mentionMatch = text.match(/<@(U[A-Z0-9]+)(?:\|.*?)?>/);
+        if (mentionMatch) {
+          userId = mentionMatch[1];
+        }
+
+        if (!userId) {
+          await say('Please mention a user. Usage: /analyze @username');
           return;
         }
 
-        const userId = match[1];
         logger.info(`Slash command /analyze triggered for user: ${userId}`);
 
         // Fetch existing analysis from db
