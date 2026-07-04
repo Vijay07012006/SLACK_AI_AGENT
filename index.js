@@ -120,17 +120,37 @@ class SlackAIAgent {
     this.slackApp.command("/analyze", async ({ command, ack, say, client }) => {
       await ack();
       try {
-        const text = command.text;
+        // 🔥 DEBUG: Yeh console.log Render logs mein dikhega, humein exact text pata chalega
+        console.log('[DEBUG] Raw slash text received:', command.text);
+
+        const text = command.text || "";
         let userId = null;
 
-        // Regex jo <@U12345> aur <@U12345|DisplayName> dono ko handle kare
-        const mentionMatch = text.match(/<@(U[A-Z0-9]+)(?:\|.*?)?>/);
-        if (mentionMatch) {
-          userId = mentionMatch[1];
+        // 1. Standard Slack mention format: <@U12345> ya <@U12345|DisplayName>
+        let match = text.match(/<@(U[A-Z0-9]+)(?:\|.*?)?>/);
+        if (match) {
+          userId = match[1];
         }
 
+        // 2. Agar upar se na mile, toh try @U12345 (bina brackets ke)
         if (!userId) {
-          await say('Please mention a user. Usage: /analyze @username');
+          match = text.match(/@(U[A-Z0-9]+)/);
+          if (match) {
+            userId = match[1];
+          }
+        }
+
+        // 3. Agar ab bhi na mile, toh sirf U12345 (bina @ ke) check karo
+        if (!userId) {
+          match = text.match(/^(U[A-Z0-9]+)$/);
+          if (match) {
+            userId = match[1];
+          }
+        }
+
+        // 4. Agar kuch bhi match nahi hua, toh error message ke saath raw text bhi dikhao
+        if (!userId) {
+          await say(`❌ Please mention a user using @. I received: "${text}"`);
           return;
         }
 
