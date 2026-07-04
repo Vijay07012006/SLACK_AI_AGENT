@@ -62,6 +62,13 @@ export async function initDatabase() {
       ALTER TABLE member_analyses ADD COLUMN IF NOT EXISTS auto_action_at TIMESTAMP;
     `);
 
+    // Migration for follow up date and auto dm sent status
+    await client.query(`
+      ALTER TABLE member_analyses 
+      ADD COLUMN IF NOT EXISTS follow_up_date TIMESTAMP,
+      ADD COLUMN IF NOT EXISTS auto_dm_sent BOOLEAN DEFAULT FALSE
+    `);
+
     logger.info('Database schema initialized and migrated');
   } catch (error) {
     logger.error(`Failed to initialize database: ${error.message}`);
@@ -196,6 +203,21 @@ export async function getAnalysisByMemberId(memberId) {
     return result.rows[0] || null;
   } catch (error) {
     logger.error(`Failed to get analysis by member ID: ${error.message}`);
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+export async function markAutoDMSent(analysisId) {
+  const client = await pool.connect();
+  try {
+    await client.query(
+      `UPDATE member_analyses SET auto_dm_sent = TRUE, follow_up_date = NOW() + INTERVAL '3 days' WHERE id = $1`,
+      [analysisId]
+    );
+  } catch (error) {
+    logger.error(`Failed to mark auto DM sent: ${error.message}`);
     throw error;
   } finally {
     client.release();

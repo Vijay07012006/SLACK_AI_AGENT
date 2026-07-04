@@ -17,6 +17,7 @@ import pool, {
   getMemberById,
   markAutomaticAction,
   getAnalysisByMemberId,
+  markAutoDMSent,
 } from "./db.js";
 
 import logger from "./src/services/logger.js";
@@ -809,7 +810,7 @@ class SlackAIAgent {
   }
 
   // Tool 1: Send Direct Message
-  async sendAutoDM(userId, memberName, fitScore) {
+  async sendAutoDM(userId, memberName, fitScore, analysisId) {
     if (!userId) {
       console.log('[AUTO] ⚠️ No userId, skipping DM');
       return false;
@@ -821,6 +822,9 @@ class SlackAIAgent {
         text: message
       });
       console.log(`[AUTO] DM sent to ${memberName}`);
+      if (analysisId) {
+        await markAutoDMSent(analysisId);
+      }
       return true;
     } catch (error) {
       console.error('[AUTO] DM failed:', error.message);
@@ -871,7 +875,7 @@ class SlackAIAgent {
       // 1. High Fit -> Auto DM
       if (fitScore >= thresholdDM) {
         if (memberInfo.id) {
-          await this.sendAutoDM(memberInfo.id, memberInfo.name, fitScore);
+          await this.sendAutoDM(memberInfo.id, memberInfo.name, fitScore, analysisId);
           await markAutomaticAction(analysisId, 'auto_dm', 'DM sent to member');
           console.log(`[AUTO] Decision: AUTO_DM for ${memberInfo.name}`);
         } else {
@@ -971,6 +975,35 @@ class SlackAIAgent {
       cron.schedule('30 3 * * *', async () => {
         logger.info('[CRON] Running daily digest...');
         await this.sendDailyDigest();
+      });
+
+      // Follow-up reminders cron schedule (3:30 AM UTC = 9:00 AM IST)
+      cron.schedule('30 3 * * *', async () => {
+        try {
+          const client = await pool.connect();
+          const result = await client.query(
+            `SELECT member_name, id, follow_up_date FROM member_analyses 
+             WHERE follow_up_date < NOW() AND follow_up_date IS NOT NULL 
+             AND auto_dm_sent = TRUE`
+          );
+          client.release();
+
+          if (result.rows.length === 0) return;
+
+          let text = '⏰ *Follow-up Reminders:*\n';
+          result.rows.forEach(row => {
+            const date = new Date(row.follow_up_date).toLocaleDateString('en-IN');
+            text += `• Follow up with *${row.member_name}* (Auto-DM sent on ${date})\n`;
+          });
+
+          await this.webClient.chat.postMessage({
+            channel: process.env.SLACK_PRIVATE_CHANNEL_ID,
+            text: text
+          });
+          console.log('[CRON] Follow-up reminders sent');
+        } catch (error) {
+          console.error('[CRON] Follow-up error:', error.message);
+        }
       });
 
       // Then start Express server
