@@ -169,6 +169,33 @@ export function buildAnalysisBlocks(memberInfo, analysis) {
     ],
   });
 
+  blocks.push({
+    type: 'actions',
+    block_id: 'member_actions',
+    elements: [
+      {
+        type: 'button',
+        text: { type: 'plain_text', text: '➕ Add to CRM', emoji: true },
+        style: 'primary',
+        value: 'crm_add',
+        action_id: 'crm_add'
+      },
+      {
+        type: 'button',
+        text: { type: 'plain_text', text: '✉️ Send Email', emoji: true },
+        value: 'email_send',
+        action_id: 'email_send'
+      },
+      {
+        type: 'button',
+        text: { type: 'plain_text', text: '❌ Ignore', emoji: true },
+        style: 'danger',
+        value: 'ignore',
+        action_id: 'ignore'
+      }
+    ]
+  });
+
   return blocks;
 }
 

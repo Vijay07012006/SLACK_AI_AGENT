@@ -225,6 +225,22 @@ class SlackAIAgent {
         await say(`Error running analysis: ${error.message}`);
       }
     });
+
+    this.slackApp.action('crm_add', async ({ ack, body, say }) => {
+      await ack();
+      const user = body.user?.name || 'Someone';
+      await say(`✅ <@${body.user.id}> added this member to CRM! (This is just a prototype. We can integrate Google Sheets/CRM here later.)`);
+    });
+
+    this.slackApp.action('email_send', async ({ ack, body, say }) => {
+      await ack();
+      await say(`📧 <@${body.user.id}> requested to send an email! (Email sending logic can be added here later.)`);
+    });
+
+    this.slackApp.action('ignore', async ({ ack, body, say }) => {
+      await ack();
+      await say(`👌 Noted! <@${body.user.id}> ignored this lead.`);
+    });
   }
 
   setupExpress() {
