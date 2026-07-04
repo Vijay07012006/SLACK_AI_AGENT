@@ -1,8 +1,31 @@
+import { ChatPromptTemplate } from "@langchain/core/prompts";
 import logger from './logger.js';
 
 export async function analyzeWithAI(model, memberInfo, researchData) {
   const companyName = process.env.COMPANY_NAME || "Our Company";
   const companyProduct = process.env.COMPANY_PRODUCT || "Our Product";
+
+  const promptTemplate = ChatPromptTemplate.fromTemplate(`
+    Analyze this new community member for fit with our commercial product.
+
+    Company: ${companyName}
+    Product: ${companyProduct}
+
+    Member Info:
+    - Name: {name}
+    - Email: {email}
+    - Title: {title}
+
+    Research Data:
+    {research}
+
+    Provide a JSON response with the following fields:
+    - fitScore (0-100): likelihood they'd be interested in our product
+    - insights: array of 3-5 key observations about the member and their potential interest in our product
+    - recommendations: array of 2-3 actionable recommendations for engaging this member
+
+    Consider job title, company description and snippet, company size, technical background, and budget authority.
+  `);
 
   try {
     const researchSummary = researchData.length > 0
@@ -15,30 +38,15 @@ export async function analyzeWithAI(model, memberInfo, researchData) {
         }).join("\n")
       : "No additional research data available.";
 
-    const promptText = `
-    Analyze this new community member for fit with our commercial product.
+    const chain = promptTemplate.pipe(model);
+    const result = await chain.invoke({
+      name: memberInfo.name,
+      email: memberInfo.email,
+      title: memberInfo.title,
+      research: researchSummary,
+    });
 
-    Company: ${companyName}
-    Product: ${companyProduct}
-
-    Member Info:
-    - Name: ${memberInfo.name}
-    - Email: ${memberInfo.email}
-    - Title: ${memberInfo.title}
-
-    Research Data:
-    ${researchSummary}
-
-    Provide a JSON response with the following fields:
-    - fitScore (0-100): likelihood they'd be interested in our product
-    - insights: array of 3-5 key observations about the member and their potential interest in our product
-    - recommendations: array of 2-3 actionable recommendations for engaging this member
-
-    Consider job title, company description and snippet, company size, technical background, and budget authority.
-    `;
-
-    const result = await model.generateContent(promptText);
-    const responseText = result.response.text();
+    const responseText = result.content || result;
     logger.info(`AI raw response text: ${responseText}`);
 
     let cleanedResponse = "";

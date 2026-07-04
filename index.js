@@ -2,7 +2,7 @@ import 'express-async-errors';
 import pkg from "@slack/bolt";
 const { App } = pkg;
 import { WebClient } from "@slack/web-api";
-import { GoogleGenerativeAI } from "@google/generative-ai";
+import { ChatGroq } from "@langchain/groq";
 import express from "express";
 import dotenv from "dotenv";
 import PQueue from 'p-queue';
@@ -32,7 +32,7 @@ const requiredEnvVars = [
   "SLACK_BOT_TOKEN",
   "SLACK_SIGNING_SECRET",
   "SLACK_APP_TOKEN",
-  "GEMINI_API_KEY",
+  "GROQ_API_KEY",
   "DATABASE_URI",
   "SLACK_PRIVATE_CHANNEL_ID",
   "COMPANY_NAME",
@@ -63,15 +63,13 @@ class SlackAIAgent {
     });
     this.webClient = new WebClient(process.env.SLACK_BOT_TOKEN);
     
-    // Configurable Gemini AI Model
-    const modelName = process.env.GEMINI_MODEL || "gemini-2.5-flash";
-    logger.info(`Initializing Gemini chat client with model: ${modelName}`);
-    this.gemini = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-    this.geminiModel = this.gemini.getGenerativeModel({
+    // Configurable Groq Model
+    const modelName = process.env.GROQ_MODEL || "llama-3.3-70b-versatile";
+    logger.info(`Initializing Groq chat client with model: ${modelName}`);
+    this.groq = new ChatGroq({
+      apiKey: process.env.GROQ_API_KEY,
       model: modelName,
-      generationConfig: {
-        temperature: 0.3,
-      },
+      temperature: 0.3,
     });
 
     // P-Queue for Slack Events (Bug 11)
@@ -174,7 +172,7 @@ class SlackAIAgent {
       }
 
       const researchData = await doBasicResearch(memberInfo);
-      const analysis = await analyzeWithAI(this.geminiModel, memberInfo, researchData);
+      const analysis = await analyzeWithAI(this.groq, memberInfo, researchData);
       analysisId = await saveMemberAnalysis(memberInfo, analysis, researchData);
       await postAnalysisToChannel(this.webClient, memberInfo, analysis, researchData);
       if (analysisId) {
