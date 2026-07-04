@@ -766,7 +766,7 @@ class SlackAIAgent {
       analysisId = await saveMemberAnalysis(memberInfo, analysis, researchData);
 
       // Autonomous Decision Engine Point
-      if (this.autonomousEnabled && memberInfo.id) {
+      if (this.autonomousEnabled) {
         await this.makeAutonomousDecision(memberInfo, analysis.fitScore, analysisId);
       } else {
         console.log(`[AUTO] Disabled for ${memberInfo.name}`);
@@ -844,9 +844,14 @@ class SlackAIAgent {
     try {
       // 1. High Fit -> Auto DM
       if (fitScore >= thresholdDM) {
-        await this.sendAutoDM(memberInfo.id, memberInfo.name, fitScore);
-        await markAutomaticAction(analysisId, 'auto_dm', 'DM sent to member');
-        console.log(`[AUTO] Decision: AUTO_DM for ${memberInfo.name}`);
+        if (memberInfo.id) {
+          await this.sendAutoDM(memberInfo.id, memberInfo.name, fitScore);
+          await markAutomaticAction(analysisId, 'auto_dm', 'DM sent to member');
+          console.log(`[AUTO] Decision: AUTO_DM for ${memberInfo.name}`);
+        } else {
+          console.log('[AUTO] No user ID, skipping DM');
+          await markAutomaticAction(analysisId, 'ignored_no_id', 'High fit but no user ID to send DM');
+        }
         return 'auto_dm';
       }
       
